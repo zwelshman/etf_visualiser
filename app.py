@@ -96,6 +96,20 @@ def validate_ticker(ticker):
     except Exception:
         return False
 
+def get_ticker_info(ticker):
+    """Get basic information about a ticker from yfinance"""
+    try:
+        etf = yf.Ticker(ticker)
+        info = etf.info
+        return {
+            "name": info.get("longName", ticker),
+            "currency": info.get("currency", "N/A"),
+            "exchange": info.get("exchange", "N/A"),
+            "asset_type": info.get("quoteType", "N/A")
+        }
+    except Exception:
+        return None
+
 def calculate_portfolio_metrics(portfolio_data, period):
     """Calculate metrics for a portfolio efficiently"""
     portfolio_return = 0
@@ -153,27 +167,79 @@ with st.sidebar.expander("🔧 Manage Tickers", expanded=False):
     st.divider()
 
     st.write("**Add New Ticker:**")
-    col1, col2 = st.columns(2)
 
-    with col1:
-        display_name = st.text_input("Display Name (e.g., VOO)", placeholder="e.g., VOO")
+    # Create tabs for different input methods
+    add_tab1, add_tab2 = st.tabs(["Manual Entry", "Auto-Detect"])
 
-    with col2:
-        ticker_symbol = st.text_input("Ticker Symbol (e.g., VOO or VOO.US)", placeholder="e.g., VOO")
+    with add_tab1:
+        st.write("*Enter ticker details manually*")
+        col1, col2 = st.columns(2)
 
-    if display_name and ticker_symbol:
-        if st.button("Add Ticker"):
-            if display_name in all_tickers:
-                st.error(f"'{display_name}' already exists!")
-            else:
-                # Validate ticker
-                with st.spinner(f"Validating {ticker_symbol}..."):
-                    if validate_ticker(ticker_symbol):
-                        st.session_state.custom_tickers[display_name] = ticker_symbol
-                        st.success(f"✓ '{display_name}' ({ticker_symbol}) added successfully!")
-                        st.rerun()
+        with col1:
+            display_name = st.text_input("Display Name (e.g., VOO)", placeholder="e.g., VOO", key="manual_display_name")
+
+        with col2:
+            ticker_symbol = st.text_input("Ticker Symbol (e.g., VOO or VOO.US)", placeholder="e.g., VOO", key="manual_ticker_symbol")
+
+        if display_name and ticker_symbol:
+            if st.button("Add Ticker", key="manual_add_btn"):
+                all_tickers_check = get_all_tickers()
+                if display_name in all_tickers_check:
+                    st.error(f"'{display_name}' already exists!")
+                else:
+                    # Validate ticker
+                    with st.spinner(f"Validating {ticker_symbol}..."):
+                        if validate_ticker(ticker_symbol):
+                            st.session_state.custom_tickers[display_name] = ticker_symbol
+                            st.success(f"✓ '{display_name}' ({ticker_symbol}) added successfully!")
+                            st.rerun()
+                        else:
+                            st.error(f"✗ Ticker '{ticker_symbol}' not found. Please check and try again.")
+
+    with add_tab2:
+        st.write("*Search and auto-detect ticker information*")
+        search_ticker = st.text_input("Search Ticker (e.g., VWRL, VOO, AAPL)", placeholder="Enter ticker symbol", key="search_ticker_input")
+
+        if search_ticker:
+            if st.button("Search & Import", key="search_import_btn"):
+                with st.spinner(f"Searching for {search_ticker}..."):
+                    if validate_ticker(search_ticker):
+                        ticker_info = get_ticker_info(search_ticker)
+
+                        if ticker_info:
+                            st.write("**Ticker Information Found:**")
+                            col_info1, col_info2 = st.columns(2)
+
+                            with col_info1:
+                                st.write(f"**Name:** {ticker_info['name']}")
+                                st.write(f"**Exchange:** {ticker_info['exchange']}")
+
+                            with col_info2:
+                                st.write(f"**Currency:** {ticker_info['currency']}")
+                                st.write(f"**Type:** {ticker_info['asset_type']}")
+
+                            st.divider()
+
+                            # Allow user to customize display name
+                            suggested_display_name = ticker_info['name'][:20] if ticker_info['name'] != "N/A" else search_ticker
+                            custom_display_name = st.text_input(
+                                "Display Name",
+                                value=search_ticker,
+                                key="auto_display_name"
+                            )
+
+                            if st.button("Confirm & Add Ticker", key="confirm_add_btn"):
+                                all_tickers_check = get_all_tickers()
+                                if custom_display_name in all_tickers_check:
+                                    st.error(f"'{custom_display_name}' already exists!")
+                                else:
+                                    st.session_state.custom_tickers[custom_display_name] = search_ticker
+                                    st.success(f"✓ '{custom_display_name}' ({search_ticker}) added successfully!")
+                                    st.rerun()
+                        else:
+                            st.info("Ticker found but unable to retrieve detailed information. You can still add it manually.")
                     else:
-                        st.error(f"✗ Ticker '{ticker_symbol}' not found. Please check and try again.")
+                        st.error(f"✗ Ticker '{search_ticker}' not found on yfinance. Please check the symbol and try again.")
 
     st.divider()
 
@@ -182,7 +248,7 @@ with st.sidebar.expander("🔧 Manage Tickers", expanded=False):
 
     if custom_ticker_names:
         ticker_to_remove = st.selectbox("Select custom ticker to remove", custom_ticker_names)
-        if st.button("Remove Ticker"):
+        if st.button("Remove Ticker", key="remove_btn"):
             del st.session_state.custom_tickers[ticker_to_remove]
             # Clear cache for this ticker
             cache_keys_to_remove = [k for k in st.session_state.etf_cache.keys() if k.startswith(ticker_to_remove)]
@@ -389,4 +455,81 @@ if st.session_state.portfolios:
                         "Portfolio": portfolio_name,
                         "Return (%)": f"{total_return:.2f}%",
                         "Starting Value": "100.00",
-                        "Ending Value":
+                        "Ending Value": f"{normalized.iloc[-1]:.2f}"
+                    })
+
+            fig.update_layout(
+                title="Portfolio Performance Comparison",
+                xaxis_title="Date",
+                yaxis_title="Indexed Value (Starting at 100)",
+                height=500,
+                hovermode='x unified'
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Comparison table
+            st.write("**Performance Summary:**")
+            comparison_df = pd.DataFrame(comparison_data)
+            st.dataframe(comparison_df, use_container_width=True, hide_index=True)
+
+    with tab4:
+        st.subheader("Historical Data")
+
+        # Select ticker to view
+        selected_ticker = st.selectbox("Select ticker to view historical data", etf_display_names, key="historical_select")
+
+        if selected_ticker:
+            df = get_etf_data(selected_ticker, period)
+
+            if df is not None and not df.empty:
+                # Plot historical data
+                fig = go.Figure()
+
+                fig.add_trace(go.Scatter(
+                    x=df.index,
+                    y=df['Close'],
+                    mode='lines',
+                    name='Close Price',
+                    hovertemplate='<b>Date:</b> %{x|%Y-%m-%d}<br><b>Close:</b> $%{y:.2f}<extra></extra>'
+                ))
+
+                fig.update_layout(
+                    title=f"{selected_ticker} - Historical Price",
+                    xaxis_title="Date",
+                    yaxis_title="Price",
+                    height=500
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+                # Display data table
+                st.write("**Historical Data:**")
+                display_df = df.copy()
+                display_df.index = display_df.index.strftime('%Y-%m-%d')
+                st.dataframe(display_df.round(2), use_container_width=True)
+            else:
+                st.error(f"Unable to fetch data for {selected_ticker}")
+
+    with tab5:
+        st.subheader("All Available Tickers")
+
+        all_tickers = get_all_tickers()
+
+        # Create a detailed ticker list
+        ticker_list = []
+        for name, ticker in all_tickers.items():
+            ticker_type = "Default" if name in default_etfs else "Custom"
+            ticker_list.append({
+                "Display Name": name,
+                "Ticker Symbol": ticker,
+                "Type": ticker_type
+            })
+
+        ticker_df = pd.DataFrame(ticker_list)
+        ticker_df = ticker_df.sort_values("Display Name")
+
+        st.dataframe(ticker_df, use_container_width=True, hide_index=True)
+
+        st.info(f"Total tickers available: {len(ticker_df)} (Default: {len(default_etfs)}, Custom: {len(st.session_state.custom_tickers)})")
+
+else:
+    st.info("👈 Create a portfolio to get started!")
