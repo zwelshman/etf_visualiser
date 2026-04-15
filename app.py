@@ -111,11 +111,34 @@ def get_ticker_info(ticker):
     except Exception:
         return None
 
+def calculate_annualized_return(start_price, end_price, num_years):
+    """Calculate annualized return (CAGR)"""
+    if num_years <= 0 or start_price <= 0:
+        return 0
+    return ((end_price / start_price) ** (1 / num_years) - 1) * 100
+
+def get_years_from_period(period):
+    """Convert period string to approximate years"""
+    period_map = {
+        "1mo": 1/12,
+        "3mo": 3/12,
+        "6mo": 6/12,
+        "1y": 1,
+        "2y": 2,
+        "5y": 5,
+        "max": 10  # Default assumption for max
+    }
+    return period_map.get(period, 1)
+
 def calculate_portfolio_metrics(portfolio_data, period):
     """Calculate metrics for a portfolio efficiently"""
     portfolio_return = 0
+    portfolio_annualized_return = 0
     portfolio_volatility = 0
     etf_count = 0
+
+    # Get number of years for annualized return calculation
+    num_years = get_years_from_period(period)
 
     for etf, weight in portfolio_data.items():
         df = get_etf_data(etf, period)
@@ -123,15 +146,17 @@ def calculate_portfolio_metrics(portfolio_data, period):
             start_price = df['Close'].iloc[0]
             end_price = df['Close'].iloc[-1]
             etf_return = ((end_price - start_price) / start_price) * 100
+            etf_annualized_return = calculate_annualized_return(start_price, end_price, num_years)
             etf_volatility = df['Close'].pct_change().std() * 100
 
             portfolio_return += (etf_return * weight / 100)
+            portfolio_annualized_return += (etf_annualized_return * weight / 100)
             portfolio_volatility += ((etf_volatility ** 2) * (weight / 100) ** 2)
             etf_count += 1
 
     portfolio_volatility = (portfolio_volatility ** 0.5) if portfolio_volatility > 0 else 0
 
-    return portfolio_return, portfolio_volatility, etf_count
+    return portfolio_return, portfolio_annualized_return, portfolio_volatility, etf_count
 
 def get_portfolio_performance(portfolio_data, period):
     """Calculate weighted portfolio performance"""
@@ -374,16 +399,19 @@ if st.session_state.portfolios:
                 st.write("**Portfolio Metrics:**")
 
                 # Calculate portfolio metrics
-                portfolio_return, portfolio_volatility, etf_count = calculate_portfolio_metrics(current_portfolio_data, period)
+                portfolio_return, portfolio_annualized_return, portfolio_volatility, etf_count = calculate_portfolio_metrics(current_portfolio_data, period)
 
-                # Display metrics
-                col_m1, col_m2, col_m3 = st.columns(3)
+                # Display metrics in a 2x2 grid
+                col_m1, col_m2 = st.columns(2)
                 with col_m1:
-                    color = "green" if portfolio_return >= 0 else "red"
-                    st.metric("Portfolio Return", f"{portfolio_return:.2f}%")
+                    st.metric("Total Return", f"{portfolio_return:.2f}%")
                 with col_m2:
-                    st.metric("Portfolio Volatility", f"{portfolio_volatility:.2f}%")
+                    st.metric("Annualized Return", f"{portfolio_annualized_return:.2f}%")
+
+                col_m3, col_m4 = st.columns(2)
                 with col_m3:
+                    st.metric("Portfolio Volatility", f"{portfolio_volatility:.2f}%")
+                with col_m4:
                     st.metric("ETF Holdings", etf_count)
         else:
             st.info("Select a portfolio to view details")
@@ -431,6 +459,7 @@ if st.session_state.portfolios:
             fig = go.Figure()
 
             comparison_data = []
+            num_years = get_years_from_period(period)
 
             for portfolio_name in compare_portfolios:
                 portfolio_data = st.session_state.portfolios[portfolio_name]
@@ -450,11 +479,14 @@ if st.session_state.portfolios:
                         hovertemplate='<b>%{fullData.name}</b><br>Date: %{x|%Y-%m-%d}<br>Value (Indexed): %{y:.2f}<extra></extra>'
                     ))
 
-                    # Calculate return
+                    # Calculate returns
                     total_return = ((normalized.iloc[-1] - 100) / 100) * 100
+                    annualized_return = calculate_annualized_return(100, normalized.iloc[-1], num_years)
+
                     comparison_data.append({
                         "Portfolio": portfolio_name,
-                        "Return (%)": f"{total_return:.2f}%",
+                        "Total Return (%)": f"{total_return:.2f}%",
+                        "Annualized Return (%)": f"{annualized_return:.2f}%",
                         "Starting Value": "100.00",
                         "Ending Value": f"{normalized.iloc[-1]:.2f}"
                     })
@@ -504,6 +536,7 @@ if st.session_state.portfolios:
         st.subheader("All Available ETFs")
 
         period_all = st.selectbox("Select Time Period", ["1mo", "3mo", "6mo", "1y", "2y", "5y"], key="all_etf_period")
+        num_years = get_years_from_period(period_all)
 
         # Chart all ETFs
         fig = go.Figure()
@@ -538,14 +571,19 @@ if st.session_state.portfolios:
             if df is not None and not df.empty:
                 start_price = df['Close'].iloc[0]
                 end_price = df['Close'].iloc[-1]
-                etf_return = ((end_price - start_price) / start_price) * 100
+                total_return = ((end_price - start_price) / start_price) * 100
+                annualized_return = calculate_annualized_return(start_price, end_price, num_years)
                 etf_volatility = df['Close'].pct_change().std() * 100
+
+                # Calculate Sharpe Ratio (assuming 0% risk-free rate)
+                sharpe_ratio = (annualized_return / etf_volatility) if etf_volatility != 0 else 0
 
                 perf_data.append({
                     "ETF": etf,
-                    "Return (%)": f"{etf_return:.2f}%",
+                    "Total Return (%)": f"{total_return:.2f}%",
+                    "Annualized Return (%)": f"{annualized_return:.2f}%",
                     "Volatility (%)": f"{etf_volatility:.2f}%",
-                    "Sharpe Ratio": f"{(etf_return / etf_volatility):.2f}" if etf_volatility != 0 else "N/A"
+                    "Sharpe Ratio": f"{sharpe_ratio:.2f}"
                 })
 
         perf_df = pd.DataFrame(perf_data)
