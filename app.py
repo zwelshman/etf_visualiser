@@ -23,20 +23,18 @@ hide_streamlit_style = """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
 st.title("📈 Multi-Portfolio ETF Dashboard")
-st.markdown("Track and compare your ETF portfolios: VWRL, AVSG, VUKE, SGLN, VAGP, GGRP, BCOG")
+st.markdown("Track and compare your ETF portfolios")
 
-# ETF list with proper ticker formats for yfinance
-etf_mapping = {
-    "VWRL": "VWRL.L",      # LSE
-    "AVSG": "AVSG.L",      # LSE
-    "VUKE": "VUKE.L",      # LSE
-    "SGLN": "SGLN.L",      # LSE
-    "VAGP": "VAGP.L",      # LSE
-    "GGRP": "GGRP.L",      # LSE
-    "BCOG": "BCOG.L"       # LSE
+# Default ETFs
+default_etfs = {
+    "VWRL": "VWRL.L",
+    "AVSG": "AVSG.L",
+    "VUKE": "VUKE.L",
+    "SGLN": "SGLN.L",
+    "VAGP": "VAGP.L",
+    "GGRP": "GGRP.L",
+    "BCOG": "BCOG.L"
 }
-
-etf_display_names = list(etf_mapping.keys())
 
 # Portfolio storage (using session state)
 if 'portfolios' not in st.session_state:
@@ -47,6 +45,17 @@ if 'current_portfolio' not in st.session_state:
 
 if 'etf_cache' not in st.session_state:
     st.session_state.etf_cache = {}
+
+if 'custom_tickers' not in st.session_state:
+    st.session_state.custom_tickers = {}
+
+# Merge default and custom tickers
+def get_all_tickers():
+    all_tickers = default_etfs.copy()
+    all_tickers.update(st.session_state.custom_tickers)
+    return all_tickers
+
+etf_mapping = get_all_tickers()
 
 # Optimized data fetching with better caching
 @st.cache_data(ttl=3600)
@@ -65,6 +74,9 @@ def get_etf_data_cached(ticker_with_suffix, period):
 
 def get_etf_data(display_name, period):
     """Wrapper to get ETF data"""
+    if display_name not in etf_mapping:
+        return None
+
     ticker = etf_mapping[display_name]
     cache_key = f"{display_name}_{period}"
 
@@ -74,6 +86,15 @@ def get_etf_data(display_name, period):
         st.session_state.etf_cache[cache_key] = df
 
     return st.session_state.etf_cache[cache_key]
+
+def validate_ticker(ticker):
+    """Validate if a ticker exists on yfinance"""
+    try:
+        etf = yf.Ticker(ticker)
+        df = etf.history(period="1d")
+        return not df.empty
+    except Exception:
+        return False
 
 def calculate_portfolio_metrics(portfolio_data, period):
     """Calculate metrics for a portfolio efficiently"""
@@ -114,10 +135,70 @@ def get_portfolio_performance(portfolio_data, period):
 
     return portfolio_prices
 
-# Sidebar - Portfolio Management
-st.sidebar.header("📊 Portfolio Management")
+# Sidebar - Portfolio Management & Ticker Management
+st.sidebar.header("📊 Portfolio & Ticker Management")
+
+# Ticker Management Section
+with st.sidebar.expander("🔧 Manage Tickers", expanded=False):
+    st.write("**Available Tickers:**")
+
+    # Display current tickers
+    all_tickers = get_all_tickers()
+    ticker_display = pd.DataFrame([
+        {"Display Name": name, "Ticker": ticker, "Type": "Default" if name in default_etfs else "Custom"}
+        for name, ticker in all_tickers.items()
+    ])
+    st.dataframe(ticker_display, use_container_width=True, hide_index=True)
+
+    st.divider()
+
+    st.write("**Add New Ticker:**")
+    col1, col2 = st.columns(2)
+
+    with col1:
+        display_name = st.text_input("Display Name (e.g., VOO)", placeholder="e.g., VOO")
+
+    with col2:
+        ticker_symbol = st.text_input("Ticker Symbol (e.g., VOO or VOO.US)", placeholder="e.g., VOO")
+
+    if display_name and ticker_symbol:
+        if st.button("Add Ticker"):
+            if display_name in all_tickers:
+                st.error(f"'{display_name}' already exists!")
+            else:
+                # Validate ticker
+                with st.spinner(f"Validating {ticker_symbol}..."):
+                    if validate_ticker(ticker_symbol):
+                        st.session_state.custom_tickers[display_name] = ticker_symbol
+                        st.success(f"✓ '{display_name}' ({ticker_symbol}) added successfully!")
+                        st.rerun()
+                    else:
+                        st.error(f"✗ Ticker '{ticker_symbol}' not found. Please check and try again.")
+
+    st.divider()
+
+    st.write("**Remove Ticker:**")
+    custom_ticker_names = list(st.session_state.custom_tickers.keys())
+
+    if custom_ticker_names:
+        ticker_to_remove = st.selectbox("Select custom ticker to remove", custom_ticker_names)
+        if st.button("Remove Ticker"):
+            del st.session_state.custom_tickers[ticker_to_remove]
+            # Clear cache for this ticker
+            cache_keys_to_remove = [k for k in st.session_state.etf_cache.keys() if k.startswith(ticker_to_remove)]
+            for key in cache_keys_to_remove:
+                del st.session_state.etf_cache[key]
+            st.success(f"'{ticker_to_remove}' removed!")
+            st.rerun()
+    else:
+        st.info("No custom tickers to remove")
+
+st.sidebar.divider()
 
 # Create or select portfolio
+all_tickers = get_all_tickers()
+etf_display_names = list(all_tickers.keys())
+
 portfolio_action = st.sidebar.radio("Action", ["View Portfolios", "Create New Portfolio"])
 
 if portfolio_action == "Create New Portfolio":
@@ -125,23 +206,23 @@ if portfolio_action == "Create New Portfolio":
     new_portfolio_name = st.sidebar.text_input("Portfolio Name", placeholder="My Portfolio")
 
     if new_portfolio_name:
-        st.sidebar.write("**Add ETFs and their allocations:**")
+        st.sidebar.write("**Add Tickers and their allocations:**")
 
         portfolio_holdings = {}
         total_allocation = 0
 
-        # Dynamic input for ETF holdings
-        for etf in etf_display_names:
+        # Dynamic input for ticker holdings
+        for ticker in etf_display_names:
             weight = st.sidebar.number_input(
-                f"{etf} Allocation (%)",
+                f"{ticker} Allocation (%)",
                 min_value=0.0,
                 max_value=100.0,
                 value=0.0,
                 step=0.5,
-                key=f"weight_{etf}"
+                key=f"weight_{ticker}"
             )
             if weight > 0:
-                portfolio_holdings[etf] = weight
+                portfolio_holdings[ticker] = weight
                 total_allocation += weight
 
         # Display allocation summary
@@ -159,7 +240,7 @@ if portfolio_action == "Create New Portfolio":
             elif total_allocation > 0:
                 st.sidebar.warning(f"⚠ Current allocation: {total_allocation:.2f}% (adjust to 100%)")
             else:
-                st.sidebar.info("Select at least one ETF")
+                st.sidebar.info("Select at least one ticker")
 
 else:  # View Portfolios
     st.sidebar.subheader("Your Portfolios")
@@ -203,7 +284,7 @@ if st.session_state.portfolios:
         "Allocation", 
         "Performance Comparison", 
         "Historical Data", 
-        "All ETFs"
+        "All Tickers"
     ])
 
     with tab1:
@@ -219,7 +300,7 @@ if st.session_state.portfolios:
 
             with col1:
                 st.write("**Portfolio Holdings:**")
-                holdings_df = pd.DataFrame(list(current_portfolio_data.items()), columns=["ETF", "Allocation (%)"])
+                holdings_df = pd.DataFrame(list(current_portfolio_data.items()), columns=["Ticker", "Allocation (%)"])
                 holdings_df = holdings_df.sort_values("Allocation (%)", ascending=False)
                 st.dataframe(holdings_df, use_container_width=True, hide_index=True)
 
@@ -232,12 +313,11 @@ if st.session_state.portfolios:
                 # Display metrics
                 col_m1, col_m2, col_m3 = st.columns(3)
                 with col_m1:
-                    color = "green" if portfolio_return >= 0 else "red"
                     st.metric("Portfolio Return", f"{portfolio_return:.2f}%")
                 with col_m2:
                     st.metric("Portfolio Volatility", f"{portfolio_volatility:.2f}%")
                 with col_m3:
-                    st.metric("ETF Holdings", etf_count)
+                    st.metric("Holdings Count", etf_count)
         else:
             st.info("Select a portfolio to view details")
 
@@ -265,7 +345,7 @@ if st.session_state.portfolios:
 
             # Allocation table
             st.write("**Allocation Details:**")
-            alloc_df = pd.DataFrame(list(portfolio_data.items()), columns=["ETF", "Allocation (%)"])
+            alloc_df = pd.DataFrame(list(portfolio_data.items()), columns=["Ticker", "Allocation (%)"])
             alloc_df = alloc_df.sort_values("Allocation (%)", ascending=False)
             st.dataframe(alloc_df, use_container_width=True, hide_index=True)
 
@@ -309,80 +389,4 @@ if st.session_state.portfolios:
                         "Portfolio": portfolio_name,
                         "Return (%)": f"{total_return:.2f}%",
                         "Starting Value": "100.00",
-                        "Ending Value": f"{normalized.iloc[-1]:.2f}"
-                    })
-
-            fig.update_layout(
-                title="Portfolio Performance Comparison (Indexed to 100)",
-                xaxis_title="Date",
-                yaxis_title="Indexed Value",
-                hovermode='x unified',
-                height=500
-            )
-            st.plotly_chart(fig, use_container_width=True)
-
-            # Comparison table
-            if comparison_data:
-                st.write("**Performance Summary:**")
-                comp_df = pd.DataFrame(comparison_data)
-                st.dataframe(comp_df, use_container_width=True, hide_index=True)
-
-    with tab4:
-        st.subheader("Historical Data")
-
-        # Select portfolio and ETF
-        col1, col2 = st.columns(2)
-
-        with col1:
-            selected_portfolio_data = st.selectbox("Select Portfolio", portfolio_names, key="hist_portfolio")
-
-        with col2:
-            portfolio_etfs = list(st.session_state.portfolios[selected_portfolio_data].keys())
-            selected_etf = st.selectbox("Select ETF", portfolio_etfs, key="hist_etf")
-
-        df = get_etf_data(selected_etf, period)
-        if df is not None and not df.empty:
-            st.dataframe(df, use_container_width=True)
-
-            # Download button
-            csv = df.to_csv()
-            st.download_button(
-                label=f"Download {selected_etf} Data as CSV",
-                data=csv,
-                file_name=f"{selected_etf}_{datetime.now().strftime('%Y%m%d')}.csv",
-                mime="text/csv"
-            )
-
-    with tab5:
-        st.subheader("All Available ETFs")
-
-        period_all = st.selectbox("Select Time Period", ["1mo", "3mo", "6mo", "1y", "2y", "5y"], key="all_etf_period")
-
-        # Chart all ETFs
-        fig = go.Figure()
-
-        for etf in etf_display_names:
-            df = get_etf_data(etf, period_all)
-            if df is not None and not df.empty:
-                normalized = (df['Close'] / df['Close'].iloc[0]) * 100
-                fig.add_trace(go.Scatter(
-                    x=normalized.index,
-                    y=normalized.values,
-                    mode='lines',
-                    name=etf,
-                    hovertemplate='<b>%{fullData.name}</b><br>Date: %{x|%Y-%m-%d}<br>Price (Indexed): %{y:.2f}<extra></extra>'
-                ))
-
-        fig.update_layout(
-            title="All Available ETFs - Price Performance (Indexed to 100)",
-            xaxis_title="Date",
-            yaxis_title="Indexed Price",
-            hovermode='x unified',
-            height=500
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-        # Performance table
-        st.write("**ETF Performance Metrics:**")
-
-        perf_data = []
+                        "Ending Value":
