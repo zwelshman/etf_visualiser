@@ -3,12 +3,26 @@ import pandas as pd
 import yfinance as yf
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
-import json
-import os
+import warnings
+warnings.filterwarnings('ignore')
+
+# Suppress yfinance output
+import logging
+logging.getLogger('yfinance').setLevel(logging.ERROR)
 
 st.set_page_config(page_title="ETF Portfolio Dashboard", layout="wide")
 
-st.title("Multi-Portfolio ETF Dashboard")
+# Hide Streamlit header and footer
+hide_streamlit_style = """
+    <style>
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    .stDeployButton {display:none;}
+    </style>
+"""
+st.markdown(hide_streamlit_style, unsafe_allow_html=True)
+
+st.title("📈 Multi-Portfolio ETF Dashboard")
 st.markdown("Track and compare your ETF portfolios: VWRL, AVSG, VUKE, SGLN, VAGP, GGRP, BCOG")
 
 # ETF list with proper ticker formats for yfinance
@@ -31,21 +45,74 @@ if 'portfolios' not in st.session_state:
 if 'current_portfolio' not in st.session_state:
     st.session_state.current_portfolio = None
 
-# Fetch data with proper error handling
+if 'etf_cache' not in st.session_state:
+    st.session_state.etf_cache = {}
+
+# Optimized data fetching with better caching
 @st.cache_data(ttl=3600)
-def get_etf_data(display_name, period):
-    ticker = etf_mapping[display_name]
+def get_etf_data_cached(ticker_with_suffix, period):
+    """Fetch ETF data with caching"""
     try:
-        etf = yf.Ticker(ticker)
+        etf = yf.Ticker(ticker_with_suffix)
         df = etf.history(period=period)
 
         if df.empty:
-            return None, None
+            return None
 
-        info = etf.info if hasattr(etf, 'info') else {}
-        return df, info
-    except Exception as e:
-        return None, None
+        return df
+    except Exception:
+        return None
+
+def get_etf_data(display_name, period):
+    """Wrapper to get ETF data"""
+    ticker = etf_mapping[display_name]
+    cache_key = f"{display_name}_{period}"
+
+    # Check session cache first
+    if cache_key not in st.session_state.etf_cache:
+        df = get_etf_data_cached(ticker, period)
+        st.session_state.etf_cache[cache_key] = df
+
+    return st.session_state.etf_cache[cache_key]
+
+def calculate_portfolio_metrics(portfolio_data, period):
+    """Calculate metrics for a portfolio efficiently"""
+    portfolio_return = 0
+    portfolio_volatility = 0
+    etf_count = 0
+
+    for etf, weight in portfolio_data.items():
+        df = get_etf_data(etf, period)
+        if df is not None and not df.empty:
+            start_price = df['Close'].iloc[0]
+            end_price = df['Close'].iloc[-1]
+            etf_return = ((end_price - start_price) / start_price) * 100
+            etf_volatility = df['Close'].pct_change().std() * 100
+
+            portfolio_return += (etf_return * weight / 100)
+            portfolio_volatility += ((etf_volatility ** 2) * (weight / 100) ** 2)
+            etf_count += 1
+
+    portfolio_volatility = (portfolio_volatility ** 0.5) if portfolio_volatility > 0 else 0
+
+    return portfolio_return, portfolio_volatility, etf_count
+
+def get_portfolio_performance(portfolio_data, period):
+    """Calculate weighted portfolio performance"""
+    portfolio_prices = None
+
+    for etf, weight in portfolio_data.items():
+        df = get_etf_data(etf, period)
+
+        if df is not None and not df.empty:
+            if portfolio_prices is None:
+                portfolio_prices = df['Close'].copy() * (weight / 100)
+            else:
+                # Align indices and add weighted prices
+                aligned_price = df['Close'].reindex(portfolio_prices.index, method='ffill')
+                portfolio_prices = portfolio_prices.add(aligned_price * (weight / 100), fill_value=0)
+
+    return portfolio_prices
 
 # Sidebar - Portfolio Management
 st.sidebar.header("📊 Portfolio Management")
@@ -115,10 +182,6 @@ else:  # View Portfolios
                 st.session_state.current_portfolio = None
                 st.sidebar.success("Portfolio deleted!")
                 st.rerun()
-
-        with col1:
-            if st.button("✏️ Edit"):
-                st.session_state.edit_mode = True
     else:
         st.sidebar.info("No portfolios created yet. Create one to get started!")
 
@@ -164,28 +227,12 @@ if st.session_state.portfolios:
                 st.write("**Portfolio Metrics:**")
 
                 # Calculate portfolio metrics
-                portfolio_return = 0
-                portfolio_volatility = 0
-                portfolio_value = 0
-                etf_count = 0
-
-                for etf, weight in current_portfolio_data.items():
-                    df, _ = get_etf_data(etf, period)
-                    if df is not None and not df.empty:
-                        start_price = df['Close'].iloc[0]
-                        end_price = df['Close'].iloc[-1]
-                        etf_return = ((end_price - start_price) / start_price) * 100
-                        etf_volatility = df['Close'].pct_change().std() * 100
-
-                        portfolio_return += (etf_return * weight / 100)
-                        portfolio_volatility += ((etf_volatility ** 2) * (weight / 100) ** 2)
-                        etf_count += 1
-
-                portfolio_volatility = (portfolio_volatility ** 0.5) if portfolio_volatility > 0 else 0
+                portfolio_return, portfolio_volatility, etf_count = calculate_portfolio_metrics(current_portfolio_data, period)
 
                 # Display metrics
                 col_m1, col_m2, col_m3 = st.columns(3)
                 with col_m1:
+                    color = "green" if portfolio_return >= 0 else "red"
                     st.metric("Portfolio Return", f"{portfolio_return:.2f}%")
                 with col_m2:
                     st.metric("Portfolio Volatility", f"{portfolio_volatility:.2f}%")
@@ -241,19 +288,8 @@ if st.session_state.portfolios:
             for portfolio_name in compare_portfolios:
                 portfolio_data = st.session_state.portfolios[portfolio_name]
 
-                # Get price data for all ETFs and weight them
-                portfolio_prices = None
-
-                for etf, weight in portfolio_data.items():
-                    df, _ = get_etf_data(etf, period)
-
-                    if df is not None and not df.empty:
-                        if portfolio_prices is None:
-                            portfolio_prices = df['Close'].copy() * (weight / 100)
-                        else:
-                            # Align indices
-                            aligned_price = df['Close'].reindex(portfolio_prices.index, method='ffill')
-                            portfolio_prices += aligned_price * (weight / 100)
+                # Get weighted portfolio prices
+                portfolio_prices = get_portfolio_performance(portfolio_data, period)
 
                 if portfolio_prices is not None:
                     # Normalize to 100
@@ -272,7 +308,7 @@ if st.session_state.portfolios:
                     comparison_data.append({
                         "Portfolio": portfolio_name,
                         "Return (%)": f"{total_return:.2f}%",
-                        "Starting Value": f"100.00",
+                        "Starting Value": "100.00",
                         "Ending Value": f"{normalized.iloc[-1]:.2f}"
                     })
 
@@ -304,7 +340,7 @@ if st.session_state.portfolios:
             portfolio_etfs = list(st.session_state.portfolios[selected_portfolio_data].keys())
             selected_etf = st.selectbox("Select ETF", portfolio_etfs, key="hist_etf")
 
-        df, _ = get_etf_data(selected_etf, period)
+        df = get_etf_data(selected_etf, period)
         if df is not None and not df.empty:
             st.dataframe(df, use_container_width=True)
 
@@ -326,7 +362,7 @@ if st.session_state.portfolios:
         fig = go.Figure()
 
         for etf in etf_display_names:
-            df, _ = get_etf_data(etf, period_all)
+            df = get_etf_data(etf, period_all)
             if df is not None and not df.empty:
                 normalized = (df['Close'] / df['Close'].iloc[0]) * 100
                 fig.add_trace(go.Scatter(
@@ -350,29 +386,3 @@ if st.session_state.portfolios:
         st.write("**ETF Performance Metrics:**")
 
         perf_data = []
-        for etf in etf_display_names:
-            df, _ = get_etf_data(etf, period_all)
-            if df is not None and not df.empty:
-                start_price = df['Close'].iloc[0]
-                end_price = df['Close'].iloc[-1]
-                return_pct = ((end_price - start_price) / start_price) * 100
-                volatility = df['Close'].pct_change().std() * 100
-
-                perf_data.append({
-                    "ETF": etf,
-                    "Current Price (GBp)": f"{end_price:.2f}",
-                    "Return (%)": f"{return_pct:.2f}%",
-                    "Volatility (%)": f"{volatility:.2f}%",
-                    "52W High (GBp)": f"{df['High'].max():.2f}",
-                    "52W Low (GBp)": f"{df['Low'].min():.2f}",
-                })
-
-        if perf_data:
-            perf_df = pd.DataFrame(perf_data)
-            st.dataframe(perf_df, use_container_width=True, hide_index=True)
-
-else:
-    st.info("👈 Create a portfolio to get started! Use the sidebar to create your first portfolio.")
-
-# Footer
-st
