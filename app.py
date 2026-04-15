@@ -23,17 +23,17 @@ hide_streamlit_style = """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
 st.title("📈 Multi-Portfolio ETF Dashboard")
-st.markdown("Track and compare your ETF portfolios")
+st.markdown("Track and compare your ETF portfolios: VWRL, AVSG, VUKE, SGLN, VAGP, GGRP, BCOG")
 
-# Default ETFs
+# Default ETF list with proper ticker formats for yfinance
 default_etfs = {
-    "VWRL": "VWRL.L",
-    "AVSG": "AVSG.L",
-    "VUKE": "VUKE.L",
-    "SGLN": "SGLN.L",
-    "VAGP": "VAGP.L",
-    "GGRP": "GGRP.L",
-    "BCOG": "BCOG.L"
+    "VWRL": "VWRL.L",      # LSE
+    "AVSG": "AVSG.L",      # LSE
+    "VUKE": "VUKE.L",      # LSE
+    "SGLN": "SGLN.L",      # LSE
+    "VAGP": "VAGP.L",      # LSE
+    "GGRP": "GGRP.L",      # LSE
+    "BCOG": "BCOG.L"       # LSE
 }
 
 # Portfolio storage (using session state)
@@ -56,6 +56,7 @@ def get_all_tickers():
     return all_tickers
 
 etf_mapping = get_all_tickers()
+etf_display_names = list(etf_mapping.keys())
 
 # Optimized data fetching with better caching
 @st.cache_data(ttl=3600)
@@ -221,7 +222,6 @@ with st.sidebar.expander("🔧 Manage Tickers", expanded=False):
                             st.divider()
 
                             # Allow user to customize display name
-                            suggested_display_name = ticker_info['name'][:20] if ticker_info['name'] != "N/A" else search_ticker
                             custom_display_name = st.text_input(
                                 "Display Name",
                                 value=search_ticker,
@@ -272,23 +272,23 @@ if portfolio_action == "Create New Portfolio":
     new_portfolio_name = st.sidebar.text_input("Portfolio Name", placeholder="My Portfolio")
 
     if new_portfolio_name:
-        st.sidebar.write("**Add Tickers and their allocations:**")
+        st.sidebar.write("**Add ETFs and their allocations:**")
 
         portfolio_holdings = {}
         total_allocation = 0
 
-        # Dynamic input for ticker holdings
-        for ticker in etf_display_names:
+        # Dynamic input for ETF holdings
+        for etf in etf_display_names:
             weight = st.sidebar.number_input(
-                f"{ticker} Allocation (%)",
+                f"{etf} Allocation (%)",
                 min_value=0.0,
                 max_value=100.0,
                 value=0.0,
                 step=0.5,
-                key=f"weight_{ticker}"
+                key=f"weight_{etf}"
             )
             if weight > 0:
-                portfolio_holdings[ticker] = weight
+                portfolio_holdings[etf] = weight
                 total_allocation += weight
 
         # Display allocation summary
@@ -306,7 +306,7 @@ if portfolio_action == "Create New Portfolio":
             elif total_allocation > 0:
                 st.sidebar.warning(f"⚠ Current allocation: {total_allocation:.2f}% (adjust to 100%)")
             else:
-                st.sidebar.info("Select at least one ticker")
+                st.sidebar.info("Select at least one ETF")
 
 else:  # View Portfolios
     st.sidebar.subheader("Your Portfolios")
@@ -350,7 +350,7 @@ if st.session_state.portfolios:
         "Allocation", 
         "Performance Comparison", 
         "Historical Data", 
-        "All Tickers"
+        "All ETFs"
     ])
 
     with tab1:
@@ -366,7 +366,7 @@ if st.session_state.portfolios:
 
             with col1:
                 st.write("**Portfolio Holdings:**")
-                holdings_df = pd.DataFrame(list(current_portfolio_data.items()), columns=["Ticker", "Allocation (%)"])
+                holdings_df = pd.DataFrame(list(current_portfolio_data.items()), columns=["ETF", "Allocation (%)"])
                 holdings_df = holdings_df.sort_values("Allocation (%)", ascending=False)
                 st.dataframe(holdings_df, use_container_width=True, hide_index=True)
 
@@ -379,11 +379,12 @@ if st.session_state.portfolios:
                 # Display metrics
                 col_m1, col_m2, col_m3 = st.columns(3)
                 with col_m1:
+                    color = "green" if portfolio_return >= 0 else "red"
                     st.metric("Portfolio Return", f"{portfolio_return:.2f}%")
                 with col_m2:
                     st.metric("Portfolio Volatility", f"{portfolio_volatility:.2f}%")
                 with col_m3:
-                    st.metric("Holdings Count", etf_count)
+                    st.metric("ETF Holdings", etf_count)
         else:
             st.info("Select a portfolio to view details")
 
@@ -411,7 +412,7 @@ if st.session_state.portfolios:
 
             # Allocation table
             st.write("**Allocation Details:**")
-            alloc_df = pd.DataFrame(list(portfolio_data.items()), columns=["Ticker", "Allocation (%)"])
+            alloc_df = pd.DataFrame(list(portfolio_data.items()), columns=["ETF", "Allocation (%)"])
             alloc_df = alloc_df.sort_values("Allocation (%)", ascending=False)
             st.dataframe(alloc_df, use_container_width=True, hide_index=True)
 
@@ -459,77 +460,96 @@ if st.session_state.portfolios:
                     })
 
             fig.update_layout(
-                title="Portfolio Performance Comparison",
+                title="Portfolio Performance Comparison (Indexed to 100)",
                 xaxis_title="Date",
-                yaxis_title="Indexed Value (Starting at 100)",
-                height=500,
-                hovermode='x unified'
+                yaxis_title="Indexed Value",
+                hovermode='x unified',
+                height=500
             )
             st.plotly_chart(fig, use_container_width=True)
 
             # Comparison table
-            st.write("**Performance Summary:**")
-            comparison_df = pd.DataFrame(comparison_data)
-            st.dataframe(comparison_df, use_container_width=True, hide_index=True)
+            if comparison_data:
+                st.write("**Performance Summary:**")
+                comp_df = pd.DataFrame(comparison_data)
+                st.dataframe(comp_df, use_container_width=True, hide_index=True)
 
     with tab4:
         st.subheader("Historical Data")
 
-        # Select ticker to view
-        selected_ticker = st.selectbox("Select ticker to view historical data", etf_display_names, key="historical_select")
+        # Select portfolio and ETF
+        col1, col2 = st.columns(2)
 
-        if selected_ticker:
-            df = get_etf_data(selected_ticker, period)
+        with col1:
+            selected_portfolio_data = st.selectbox("Select Portfolio", portfolio_names, key="hist_portfolio")
 
-            if df is not None and not df.empty:
-                # Plot historical data
-                fig = go.Figure()
+        with col2:
+            portfolio_etfs = list(st.session_state.portfolios[selected_portfolio_data].keys())
+            selected_etf = st.selectbox("Select ETF", portfolio_etfs, key="hist_etf")
 
-                fig.add_trace(go.Scatter(
-                    x=df.index,
-                    y=df['Close'],
-                    mode='lines',
-                    name='Close Price',
-                    hovertemplate='<b>Date:</b> %{x|%Y-%m-%d}<br><b>Close:</b> $%{y:.2f}<extra></extra>'
-                ))
+        df = get_etf_data(selected_etf, period)
+        if df is not None and not df.empty:
+            st.dataframe(df, use_container_width=True)
 
-                fig.update_layout(
-                    title=f"{selected_ticker} - Historical Price",
-                    xaxis_title="Date",
-                    yaxis_title="Price",
-                    height=500
-                )
-                st.plotly_chart(fig, use_container_width=True)
-
-                # Display data table
-                st.write("**Historical Data:**")
-                display_df = df.copy()
-                display_df.index = display_df.index.strftime('%Y-%m-%d')
-                st.dataframe(display_df.round(2), use_container_width=True)
-            else:
-                st.error(f"Unable to fetch data for {selected_ticker}")
+            # Download button
+            csv = df.to_csv()
+            st.download_button(
+                label=f"Download {selected_etf} Data as CSV",
+                data=csv,
+                file_name=f"{selected_etf}_{datetime.now().strftime('%Y%m%d')}.csv",
+                mime="text/csv"
+            )
 
     with tab5:
-        st.subheader("All Available Tickers")
+        st.subheader("All Available ETFs")
 
-        all_tickers = get_all_tickers()
+        period_all = st.selectbox("Select Time Period", ["1mo", "3mo", "6mo", "1y", "2y", "5y"], key="all_etf_period")
 
-        # Create a detailed ticker list
-        ticker_list = []
-        for name, ticker in all_tickers.items():
-            ticker_type = "Default" if name in default_etfs else "Custom"
-            ticker_list.append({
-                "Display Name": name,
-                "Ticker Symbol": ticker,
-                "Type": ticker_type
-            })
+        # Chart all ETFs
+        fig = go.Figure()
 
-        ticker_df = pd.DataFrame(ticker_list)
-        ticker_df = ticker_df.sort_values("Display Name")
+        for etf in etf_display_names:
+            df = get_etf_data(etf, period_all)
+            if df is not None and not df.empty:
+                normalized = (df['Close'] / df['Close'].iloc[0]) * 100
+                fig.add_trace(go.Scatter(
+                    x=normalized.index,
+                    y=normalized.values,
+                    mode='lines',
+                    name=etf,
+                    hovertemplate='<b>%{fullData.name}</b><br>Date: %{x|%Y-%m-%d}<br>Price (Indexed): %{y:.2f}<extra></extra>'
+                ))
 
-        st.dataframe(ticker_df, use_container_width=True, hide_index=True)
+        fig.update_layout(
+            title="All Available ETFs - Price Performance (Indexed to 100)",
+            xaxis_title="Date",
+            yaxis_title="Indexed Price",
+            hovermode='x unified',
+            height=500
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
-        st.info(f"Total tickers available: {len(ticker_df)} (Default: {len(default_etfs)}, Custom: {len(st.session_state.custom_tickers)})")
+        # Performance table
+        st.write("**ETF Performance Metrics:**")
+
+        perf_data = []
+        for etf in etf_display_names:
+            df = get_etf_data(etf, period_all)
+            if df is not None and not df.empty:
+                start_price = df['Close'].iloc[0]
+                end_price = df['Close'].iloc[-1]
+                etf_return = ((end_price - start_price) / start_price) * 100
+                etf_volatility = df['Close'].pct_change().std() * 100
+
+                perf_data.append({
+                    "ETF": etf,
+                    "Return (%)": f"{etf_return:.2f}%",
+                    "Volatility (%)": f"{etf_volatility:.2f}%",
+                    "Sharpe Ratio": f"{(etf_return / etf_volatility):.2f}" if etf_volatility != 0 else "N/A"
+                })
+
+        perf_df = pd.DataFrame(perf_data)
+        st.dataframe(perf_df, use_container_width=True, hide_index=True)
 
 else:
     st.info("👈 Create a portfolio to get started!")
