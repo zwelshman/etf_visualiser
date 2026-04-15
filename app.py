@@ -23,7 +23,7 @@ hide_streamlit_style = """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
 st.title("📈 Multi-Portfolio ETF Dashboard")
-st.markdown("Track and compare your ETF portfolios: VWRL, AVSG, VUKE, SGLN, VAGP, GGRP, BCOG")
+st.markdown("Track and compare your ETF portfolios")
 
 # Default ETF list with proper ticker formats for yfinance
 default_etfs = {
@@ -33,7 +33,14 @@ default_etfs = {
     "SGLN": "SGLN.L",      # LSE
     "VAGP": "VAGP.L",      # LSE
     "GGRP": "GGRP.L",      # LSE
-    "BCOG": "BCOG.L"       # LSE
+    "BCOG": "BCOG.L",      # LSE
+    "VHYL": "VHYL.L",      # LSE
+    "UKDV": "UKDV.L",      # LSE
+    "GHYS": "GHYS.L",      # LSE
+    "GBDV": "GBDV.L",      # LSE
+    "GILI": "GILI.L",      # LSE
+    "IGLS": "IGLS.L",      # LSE
+    "CRPS": "CRPS.L",      # LSE
 }
 
 # Portfolio storage (using session state)
@@ -303,7 +310,7 @@ if portfolio_action == "Create New Portfolio":
         total_allocation = 0
 
         # Dynamic input for ETF holdings
-        for etf in etf_display_names:
+        for etf in sorted(etf_display_names):
             weight = st.sidebar.number_input(
                 f"{etf} Allocation (%)",
                 min_value=0.0,
@@ -541,7 +548,7 @@ if st.session_state.portfolios:
         # Chart all ETFs
         fig = go.Figure()
 
-        for etf in etf_display_names:
+        for etf in sorted(etf_display_names):
             df = get_etf_data(etf, period_all)
             if df is not None and not df.empty:
                 normalized = (df['Close'] / df['Close'].iloc[0]) * 100
@@ -566,7 +573,7 @@ if st.session_state.portfolios:
         st.write("**ETF Performance Metrics:**")
 
         perf_data = []
-        for etf in etf_display_names:
+        for etf in sorted(etf_display_names):
             df = get_etf_data(etf, period_all)
             if df is not None and not df.empty:
                 start_price = df['Close'].iloc[0]
